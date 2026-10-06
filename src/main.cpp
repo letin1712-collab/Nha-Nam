@@ -7,7 +7,6 @@
 
 #include "bh1750_sensor.h"
 #include "scd30_sensor.h"
-#include "sht30_sensor.h"
 #include "wifi_manager.h"
 #include "thingsboard_client.h"
 #include "mqtt_client.h"
@@ -41,7 +40,6 @@ TFT_eSPI tft;
 bool wifiWasConnected = false;
 bool inConfigMode     = false;
 bool scd30Available   = false;
-bool sht30Available   = false;
 bool bh1750Available  = false;
 
 int  currentPage    = PAGE_DASHBOARD;
@@ -353,16 +351,10 @@ void setup() {
     Wire.setTimeout(5000);
     delay(3000);
 
-    Serial.println("Initializing SCD30 (CO2 only)...");
+    Serial.println("Initializing SCD30 (CO2 + temperature/humidity)...");
     scd30Available = scd30_init();
     if (!scd30Available)
-        Serial.println("Warning: SCD30 not found, continuing without CO2...");
-    delay(500);
-
-    Serial.println("Initializing SHT30 (temperature/humidity)...");
-    sht30Available = sht30_init();
-    if (!sht30Available)
-        Serial.println("Warning: SHT30 not found, continuing without temp/humidity...");
+        Serial.println("Warning: SCD30 not found, continuing without CO2/temp/humidity...");
     delay(500);
 
     Serial.println("Initializing BH1750...");
@@ -404,7 +396,7 @@ void setup() {
     else      Serial.println("ThingsBoard failed, will retry...");
 
     syncNetData(tbOk);
-    sensors.scd30Ok  = scd30Available || sht30Available;
+    sensors.scd30Ok  = scd30Available;
     sensors.bh1750Ok = bh1750Available;
 
     needFullRedraw = true;
@@ -529,14 +521,9 @@ void loop() {
 
             if (scd30Available && scd30_isDataReady()) {
                 if (scd30_readData()) {
-                    sensors.co2 = scd30_getCO2();
-                    sensorUpdated = true;
-                }
-            }
-            if (sht30Available) {
-                if (sht30_readData()) {
-                    sensors.temp = sht30_getTemperature();
-                    sensors.humi = sht30_getHumidity();
+                    sensors.co2  = scd30_getCO2();
+                    sensors.temp = scd30_getTemperature();
+                    sensors.humi = scd30_getHumidity();
                     sensorUpdated = true;
                 }
             }
@@ -558,7 +545,7 @@ void loop() {
         // ThingsBoard publish every 60s
         if (now - lastMqttPublish >= CLOUD_PUBLISH_INTERVAL_MS) {
             lastMqttPublish = now;
-            if (scd30Available || sht30Available || bh1750Available) {
+            if (scd30Available || bh1750Available) {
                 if (wifi_isConnected()) {
                     bool tbOk = tb_publishSensorData(sensors.temp, sensors.humi,
                                                      sensors.co2, sensors.lux);
