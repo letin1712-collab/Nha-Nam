@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/FILE/Embedded-Project/NHA-NAM-V2/.pio/build/esp32dev/**)"
+    ]
+  }
+}

@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AeroSense UI Simulator</title>
+  <style>
+    :root {
+      --bg: #07111f;
+      --panel: #0d1b31;
+      --cyan: #00f6ff;
+      --dim: #6f839a;
+      --green: #29ff65;
+      --red: #ff3b30;
+      --orange: #ffb000;
+      --yellow: #ffe65a;
+      --white: #f3fbff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: minmax(300px, 420px) minmax(300px, 1fr);
+      gap: 24px;
+      align-items: center;
+      padding: 24px;
+      background: radial-gradient(circle at top left, #123455, #050912 55%, #02050a);
+      color: var(--white);
+      font: 14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
+    .phone {
+      width: 300px;
+      justify-self: center;
+      padding: 18px;
+      border-radius: 30px;
+      background: linear-gradient(145deg, #1a2333, #070b12);
+      box-shadow: 0 24px 80px #000b, inset 0 0 0 1px #ffffff14;
+    }
+    canvas {
+      width: 240px;
+      height: 320px;
+      display: block;
+      margin: auto;
+      image-rendering: pixelated;
+      border-radius: 8px;
+      background: #081021;
+      box-shadow: 0 0 0 2px #111827, 0 0 30px #00f6ff22;
+      cursor: pointer;
+    }
+    .hint {
+      margin: 12px auto 0;
+      width: 240px;
+      color: #9fb4c8;
+      font-size: 12px;
+      text-align: center;
+    }
+    .panel {
+      max-width: 720px;
+      padding: 22px;
+      border: 1px solid #ffffff16;
+      border-radius: 18px;
+      background: linear-gradient(180deg, #0b1424dd, #070b14dd);
+      box-shadow: 0 18px 60px #0008;
+    }
+    h1 { margin: 0 0 6px; font-size: 24px; color: var(--cyan); }
+    h2 { margin: 20px 0 10px; font-size: 15px; color: #bcefff; }
+    p { margin: 6px 0; color: #c8d5e0; }
+    code { color: var(--cyan); background: #001e2b; padding: 2px 5px; border-radius: 5px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    label { display: grid; gap: 4px; color: #9fb4c8; font-size: 12px; }
+    input, button {
+      border: 1px solid #24415f;
+      border-radius: 10px;
+      background: #081526;
+      color: var(--white);
+      padding: 9px 10px;
+      font: inherit;
+    }
+    button {
+      background: linear-gradient(180deg, #003c54, #002437);
+      color: var(--cyan);
+      border-color: #00f6ff66;
+      cursor: pointer;
+    }
+    button:hover { filter: brightness(1.15); }
+    .toggles { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+    .log {
+      height: 96px;
+      overflow: auto;
+      padding: 10px;
+      border-radius: 10px;
+      background: #020711;
+      color: #9ff;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 12px;
+    }
+    @media (max-width: 760px) {
+      body { grid-template-columns: 1fr; }
+      .panel { justify-self: stretch; }
+    }
+  </style>
+</head>
+<body>
+  <div class="phone">
+    <canvas id="screen" width="240" height="320"></canvas>
+    <div class="hint">Click trực tiếp lên màn hình ảo: nav bar, WiFi edit, bàn phím.</div>
+  </div>
+
+  <section class="panel">
+    <h1>AeroSense UI Simulator</h1>
+    <p>Mô phỏng tương tác giao diện TFT 240×320 bằng HTML/JS. Đây là preview layout, không chạy firmware ESP32 thật.</p>
+    <p>QR page ch? hi?n th? m� QR v� hu?ng d?n scan, kh�ng hi?n Device ID/Secret Key tr�n m�n h�nh.</p>
+
+    <h2>Dữ liệu giả lập</h2>
+    <div class="grid">
+      <label>SSID <input id="ssid" value="NhaNam-WiFi"></label>
+      <label>IP <input id="ip" value="192.168.1.88"></label>
+      <label>Hardware ID <input id="hwid" value="IWCODQ793S"></label>
+      <label>Secret Key <input id="secret" value="U71JX0"></label>
+      <label>Temp °C <input id="temp" type="number" step="0.1" value="28.4"></label>
+      <label>Humidity % <input id="humi" type="number" step="0.1" value="63.2"></label>
+      <label>CO2 ppm <input id="co2" type="number" step="1" value="612"></label>
+      <label>Lux <input id="lux" type="number" step="1" value="1240"></label>
+    </div>
+
+    <div class="toggles">
+      <button id="toggleWifi">Toggle WiFi</button>
+      <button id="toggleTb">Toggle ThingsBoard</button>
+      <button id="randomSensor">Random sensor</button>
+      <button id="redraw">Redraw</button>
+    </div>
+
+    <h2>Log tương tác</h2>
+    <div id="log" class="log"></div>
+  </section>
+
+  <script>
+    const W = 240, H = 320;
+    const TOP = 30, CONTENT_Y = 32, CONTENT_H = 240, NAV_Y = 272, NAV_H = 48, NAV_ITEM_W = 80;
+    const PAGE_SENSOR = 0, PAGE_WIFI = 1, PAGE_MQTT = 2;
+    function cssRgb(r, g, b) { return `rgb(${r},${g},${b})`; }
+    function rgb565ToCss(v) {
+      const r5 = (v >> 11) & 0x1f;
+      const g6 = (v >> 5) & 0x3f;
+      const b5 = v & 0x1f;
+      return cssRgb((r5 << 3) | (r5 >> 2), (g6 << 2) | (g6 >> 4), (b5 << 3) | (b5 >> 2));
+    }
+    function color565(r, g, b) {
+      return rgb565ToCss(((r & 0xf8) << 8) | ((g & 0xfc) << 3) | (b >> 3));
+    }
+
+    const C = {
+      bg: rgb565ToCss(0x0841),
+      card: rgb565ToCss(0x10C3),
+      card2: rgb565ToCss(0x0882),
+      cyan: rgb565ToCss(0x07FF),
+      cyanDim: rgb565ToCss(0x0577),
+      teal: rgb565ToCss(0x03EF),
+      white: rgb565ToCss(0xFFFF),
+      gray: rgb565ToCss(0x8410),
+      grayDim: rgb565ToCss(0x4208),
+      green: rgb565ToCss(0x07E0),
+      red: rgb565ToCss(0xF800),
+      orange: rgb565ToCss(0xFBE0),
+      yellow: rgb565ToCss(0xFFE0),
+      black: rgb565ToCss(0x0000)
+    };
+
+    const canvas = document.getElementById('screen');
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+
+    const state = {
+      page: PAGE_SENSOR,
+      wifiOk: true,
+      tbOk: false,
+      keyboard: null,
+      fields: {
+        ssid: document.getElementById('ssid'),
+        ip: document.getElementById('ip'),
+        hwid: document.getElementById('hwid'),
+        secret: document.getElementById('secret'),
+        temp: document.getElementById('temp'),
+        humi: document.getElementById('humi'),
+        co2: document.getElementById('co2'),
+        lux: document.getElementById('lux')
+      }
+    };
+
+    function log(msg) {
+      const box = document.getElementById('log');
+      const now = new Date().toLocaleTimeString('vi-VN', { hour12: false });
+      box.textContent = `[${now}] ${msg}\n` + box.textContent;
+    }
+
+    function val(id) { return state.fields[id].value; }
+    function qrPayload() { return `i=${val('hwid')}&k=${val('secret')}`; }
+    function text(s, x, y, size = 1, color = C.white, align = 'left') {
+      ctx.fillStyle = color;
+      ctx.font = `${size * 8}px ui-monospace, Consolas, monospace`;
+      ctx.textBaseline = 'top';
+      ctx.textAlign = align;
+      ctx.fillText(String(s), x, y);
+      ctx.textAlign = 'left';
+    }
+    function rect(x, y, w, h, color) { ctx.fillStyle = color; ctx.fillRect(x, y, w, h); }
+    function strokeRound(x, y, w, h, r, color) {
+      ctx.strokeStyle = color; ctx.lineWidth = 1; roundPath(x, y, w, h, r); ctx.stroke();
+    }
+    function fillRound(x, y, w, h, r, color) {
+      ctx.fillStyle = color; roundPath(x, y, w, h, r); ctx.fill();
+    }
+    function roundPath(x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y); ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx.lineTo(x + w, y + h - r); ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx.lineTo(x + r, y + h); ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+      ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y); ctx.closePath();
+    }
+    function gradRect(x, y, w, h, a, b) {
+      const g = ctx.createLinearGradient(0, y, 0, y + h);
+      g.addColorStop(0, a); g.addColorStop(1, b);
+      rect(x, y, w, h, g);
+    }
+
+    function iconWifi(cx, cy, color) {
+      ctx.strokeStyle = color; ctx.lineWidth = 1;
+      for (const r of [5, 8, 11]) {
+        ctx.beginPath(); ctx.arc(cx, cy + 8, r, Math.PI * 1.22, Math.PI * 1.78); ctx.stroke();
+      }
+      ctx.fillStyle = color; ctx.beginPath(); ctx.arc(cx, cy + 8, 1.5, 0, Math.PI * 2); ctx.fill();
+    }
+    function iconHome(cx, cy, color) {
+      ctx.strokeStyle = color; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(cx - 10, cy); ctx.lineTo(cx, cy - 8); ctx.lineTo(cx + 10, cy); ctx.stroke();
+      ctx.strokeRect(cx - 7, cy, 14, 12);
+    }
+    function iconMqtt(cx, cy, color) {
+      ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 1;
+      ctx.strokeRect(cx - 10, cy - 8, 20, 16);
+      rect(cx - 6, cy - 4, 12, 2, color); rect(cx - 6, cy + 1, 12, 2, color);
+    }
+
+    function drawTopBar() {
+      gradRect(0, 0, W, TOP, color565(5, 10, 28), color565(12, 19, 57));
+      rect(0, TOP - 2, W, 1, C.cyanDim);
+      text('AEROSENSE', 8, 11, 1, C.cyan);
+      text('AIR', 66, 11, 1, color565(0, 80, 100));
+      const t = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false });
+      text(t, W / 2, 7, 2, C.white, 'center');
+      iconWifi(W - 28, 8, state.wifiOk ? C.green : C.red);
+      ctx.fillStyle = state.tbOk ? C.cyan : C.grayDim;
+      ctx.beginPath(); ctx.arc(W - 10, 14, 4, 0, Math.PI * 2); ctx.fill();
+    }
+
+    function drawNav() {
+      gradRect(0, NAV_Y, W, NAV_H, color565(4, 8, 22), color565(13, 19, 45));
+      rect(0, NAV_Y, W, 1, C.cyanDim);
+      const tabs = [['SENSOR', PAGE_SENSOR, iconHome], ['WIFI', PAGE_WIFI, iconWifi], ['QR', PAGE_MQTT, iconMqtt]];
+      tabs.forEach(([label, page, icon], i) => {
+        const x0 = i * NAV_ITEM_W, cx = x0 + 40, cy = NAV_Y + 16;
+        const active = state.page === page;
+        const col = active ? C.cyan : color565(60, 80, 110);
+        if (active) { rect(x0 + 10, NAV_Y, NAV_ITEM_W - 20, 3, C.cyan); fillRound(x0 + 6, NAV_Y + 4, NAV_ITEM_W - 12, 40, 5, color565(0, 25, 50)); }
+        icon(cx, cy, col);
+        text(label, cx, NAV_Y + 32, 1, col, 'center');
+      });
+      rect(NAV_ITEM_W, NAV_Y + 6, 1, NAV_H - 12, color565(0, 20, 40));
+      rect(NAV_ITEM_W * 2, NAV_Y + 6, 1, NAV_H - 12, color565(0, 20, 40));
+    }
+
+    function drawDashboard() {
+      rect(0, CONTENT_Y, W, CONTENT_H, C.bg);
+      const cards = [
+        ['CO2', 'ppm', Number(val('co2')), C.green, 0, 2000],
+        ['TEMP', '°C', Number(val('temp')), C.cyan, 10, 50],
+        ['HUMI', '%', Number(val('humi')), C.teal, 0, 100],
+        ['LUX', 'lx', Number(val('lux')), C.yellow, 0, 50000]
+      ];
+      cards.forEach((c, i) => {
+        const x = 5 + (i % 2) * 117, y = CONTENT_Y + 5 + Math.floor(i / 2) * 117;
+        fillRound(x, y, 112, 112, 8, i % 2 ? C.card : C.card2);
+        strokeRound(x, y, 112, 112, 8, color565(20, 55, 90));
+        text(c[0], x + 10, y + 10, 1, C.gray);
+        text(Math.round(c[2] * 10) / 10, x + 56, y + 42, 2, C.white, 'center');
+        text(c[1], x + 56, y + 66, 1, C.grayDim, 'center');
+        const pct = Math.max(0, Math.min(1, (c[2] - c[4]) / (c[5] - c[4])));
+        rect(x + 12, y + 92, 88, 5, color565(20, 40, 58));
+        rect(x + 12, y + 92, 88 * pct, 5, c[3]);
+      });
+    }
+
+    function drawWifiPage() {
+      rect(0, CONTENT_Y, W, CONTENT_H, C.bg);
+      gradRect(0, CONTENT_Y, W, 54, color565(5, 10, 28), color565(15, 23, 55));
+      text('WIFI', 8, CONTENT_Y + 10, 2, C.cyan);
+      fillRound(W - 78, CONTENT_Y + 9, 70, 20, 5, state.wifiOk ? C.green : C.red);
+      text(state.wifiOk ? 'ONLINE' : 'OFFLINE', W - 43, CONTENT_Y + 14, 1, C.black, 'center');
+      const rows = [['SSID', val('ssid')], ['IP', val('ip')], ['STATUS', state.wifiOk ? 'Connected' : '---']];
+      let y = CONTENT_Y + 78;
+      rows.forEach(([label, value]) => {
+        rect(0, y, W, 26, color565(6, 12, 26)); rect(0, y + 25, W, 1, color565(12, 22, 45)); rect(0, y + 4, 3, 18, C.cyanDim);
+        text(label, 10, y + 8, 1, C.grayDim);
+        text(String(value).slice(0, 22), W - 10, y + 8, 1, C.white, 'right');
+        y += 26;
+      });
+      text('Tap below or SSID to edit', W / 2, y + 8, 1, C.grayDim, 'center');
+      drawButton('>> EDIT WIFI');
+    }
+
+    function pseudoQrModules(payload, size) {
+      let seed = 2166136261;
+      for (const ch of payload) seed = Math.imul(seed ^ ch.charCodeAt(0), 16777619);
+      const m = Array.from({ length: size }, () => Array(size).fill(false));
+      function finder(x, y) {
+        for (let yy = 0; yy < 7; yy++) for (let xx = 0; xx < 7; xx++) {
+          const edge = xx === 0 || yy === 0 || xx === 6 || yy === 6;
+          const core = xx >= 2 && xx <= 4 && yy >= 2 && yy <= 4;
+          m[y + yy][x + xx] = edge || core;
+        }
+      }
+      finder(0, 0); finder(size - 7, 0); finder(0, size - 7);
+      for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+        if (m[y][x]) continue;
+        seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
+        m[y][x] = ((seed + x * 17 + y * 31) & 7) < 3;
+      }
+      return m;
+    }
+
+    function drawMqttPage() {
+      rect(0, CONTENT_Y, W, CONTENT_H, C.bg);
+      gradRect(0, CONTENT_Y, W, 36, color565(5, 10, 28), color565(12, 19, 45));
+      rect(0, CONTENT_Y + 36, W, 1, C.cyanDim);
+      fillRound(W - 62, CONTENT_Y + 8, 58, 18, 5, state.tbOk ? C.green : C.red);
+      text(state.tbOk ? 'ONLINE' : 'OFFLINE', W - 33, CONTENT_Y + 13, 1, C.black, 'center');
+      text('ZALO CLAIM', 8, CONTENT_Y + 9, 2, C.cyan);
+      const payload = qrPayload();
+      const modules = pseudoQrModules(payload, 29);
+      const scale = 5, quiet = 2, qrSize = (29 + quiet * 2) * scale, x0 = (W - qrSize) / 2, y0 = CONTENT_Y + 48;
+      fillRound(x0 - 4, y0 - 4, qrSize + 8, qrSize + 8, 8, C.white);
+      modules.forEach((row, y) => row.forEach((on, x) => { if (on) rect(x0 + (x + quiet) * scale, y0 + (y + quiet) * scale, scale, scale, C.bg); }));
+      text('QR visual mock; firmware renders real QR', W / 2, y0 + qrSize + 24, 1, C.orange, 'center');
+    }
+
+    function drawButton(label) {
+      const x = 40, y = CONTENT_Y + CONTENT_H - 32, w = 160, h = 28;
+      fillRound(x, y, w, h, 6, color565(0, 55, 90));
+      strokeRound(x, y, w, h, 6, C.cyan);
+      text(label, W / 2, y + 10, 1, C.cyan, 'center');
+    }
+
+    const keys = ['QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM'];
+    function drawKeyboard() {
+      const k = state.keyboard;
+      rect(0, 0, W, H, color565(2, 7, 18));
+      fillRound(4, 44, W - 8, 54, 8, color565(7, 21, 41));
+      text(k.label, 14, 54, 1, C.cyan);
+      text(k.text || '_', 14, 74, 2, C.white);
+      const keyH = 30, keyW = 24, y0 = 146;
+      keys.forEach((row, r) => {
+        const start = (W - row.length * keyW) / 2;
+        for (let i = 0; i < row.length; i++) key(start + i * keyW, y0 + r * 31, keyW - 2, keyH, row[i]);
+      });
+      key(1, 239, 46, 30, '?123', C.cyan); key(50, 239, 88, 30, 'SPACE', C.gray);
+      key(141, 239, 44, 30, 'ESC', C.orange); key(188, 239, 51, 30, 'OK', C.green);
+    }
+    function key(x, y, w, h, label, color = C.white) {
+      fillRound(x, y, w, h, 4, color565(14, 28, 52)); strokeRound(x, y, w, h, 4, color565(30, 55, 95));
+      text(label, x + w / 2, y + 10, 1, color, 'center');
+    }
+
+    function redraw() {
+      rect(0, 0, W, H, C.bg);
+      drawTopBar();
+      if (state.page === PAGE_SENSOR) drawDashboard();
+      if (state.page === PAGE_WIFI) drawWifiPage();
+      if (state.page === PAGE_MQTT) drawMqttPage();
+      drawNav();
+      if (state.keyboard) drawKeyboard();
+    }
+
+    function startKeyboard(label, initial, onDone) {
+      state.keyboard = { label, text: initial, onDone };
+      log(`Open keyboard: ${label}`);
+      redraw();
+    }
+
+    canvas.addEventListener('click', (ev) => {
+      const r = canvas.getBoundingClientRect();
+      const x = Math.floor((ev.clientX - r.left) * W / r.width);
+      const y = Math.floor((ev.clientY - r.top) * H / r.height);
+      if (state.keyboard) return handleKeyboard(x, y);
+      if (y >= NAV_Y) {
+        state.page = Math.max(0, Math.min(2, Math.floor(x / NAV_ITEM_W)));
+        log(`Switch page: ${['SENSOR', 'WIFI', 'QR'][state.page]}`);
+        return redraw();
+      }
+      if (state.page === PAGE_WIFI && (y >= CONTENT_Y + 100 || (y >= CONTENT_Y + 78 && y < CONTENT_Y + 104))) {
+        startKeyboard('SSID', val('ssid'), (v) => { state.fields.ssid.value = v; log(`SSID = ${v}`); });
+      }
+      if (state.page === PAGE_MQTT) log(`QR payload: ${qrPayload()}`);
+    });
+
+    function handleKeyboard(x, y) {
+      const k = state.keyboard;
+      if (y >= 146 && y < 239) {
+        const rowIndex = Math.floor((y - 146) / 31);
+        const row = keys[rowIndex];
+        const start = (W - row.length * 24) / 2;
+        const index = Math.floor((x - start) / 24);
+        if (row && index >= 0 && index < row.length) k.text += row[index];
+      } else if (y >= 239) {
+        if (x < 50) {}
+        else if (x < 141) k.text += ' ';
+        else if (x < 188) { state.keyboard = null; log('Keyboard cancelled'); }
+        else { const done = k.onDone; const value = k.text; state.keyboard = null; done(value); }
+      } else if (y > 98 && x > 190 && k.text.length) {
+        k.text = k.text.slice(0, -1);
+      }
+      redraw();
+    }
+
+    Object.values(state.fields).forEach(input => input.addEventListener('input', redraw));
+    document.getElementById('toggleWifi').onclick = () => { state.wifiOk = !state.wifiOk; log(`WiFi ${state.wifiOk ? 'ON' : 'OFF'}`); redraw(); };
+    document.getElementById('toggleTb').onclick = () => { state.tbOk = !state.tbOk; log(`ThingsBoard ${state.tbOk ? 'ONLINE' : 'OFFLINE'}`); redraw(); };
+    document.getElementById('randomSensor').onclick = () => {
+      state.fields.temp.value = (24 + Math.random() * 8).toFixed(1);
+      state.fields.humi.value = (50 + Math.random() * 25).toFixed(1);
+      state.fields.co2.value = Math.round(420 + Math.random() * 900);
+      state.fields.lux.value = Math.round(100 + Math.random() * 6000);
+      log('Randomized sensor values'); redraw();
+    };
+    document.getElementById('redraw').onclick = redraw;
+    setInterval(() => { if (!state.keyboard) redraw(); }, 1000);
+    log('Simulator ready');
+    redraw();
+  </script>
+</body>
+</html>
+
+
+
+

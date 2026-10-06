@@ -1,0 +1,468 @@
+#pragma once
+#include <TFT_eSPI.h>
+#include <qrcode.h>
+#include "thingsboard_client.h"
+#include "ui_config.h"
+#include "ui_icons.h"
+
+// ============================================================
+// Data structs
+// ============================================================
+struct SensorData {
+    float co2     = 0;
+    float temp    = 0;
+    float humi    = 0;
+    float lux     = 0;
+    bool  scd4xOk  = false;
+    bool  bh1750Ok = false;
+};
+
+struct NetData {
+    bool   wifiOk  = false;
+    bool   mqttOk  = false;
+    String ssid    = "";
+    String ip      = "";
+    String mqttHost  = "";
+    String mqttTopic = "";
+    String deviceId  = "";
+    int    mqttPort  = 1883;
+};
+
+// ============================================================
+// Setup button
+// ============================================================
+#define BTN_SETUP_X   (SCREEN_W/2 - 80)
+#define BTN_SETUP_Y   (CONTENT_Y + CONTENT_H - 32)
+#define BTN_SETUP_W   160
+#define BTN_SETUP_H   28
+
+inline bool ui_tapSetupBtn(int tx, int ty) {
+    return tx >= BTN_SETUP_X && tx <= BTN_SETUP_X + BTN_SETUP_W
+        && ty >= BTN_SETUP_Y && ty <= BTN_SETUP_Y + BTN_SETUP_H;
+}
+
+static void _drawSetupBtn(TFT_eSPI& tft, const char* label) {
+    // Gradient fill
+    for (int i = 0; i < BTN_SETUP_H; i++) {
+        float t = (float)i / BTN_SETUP_H;
+        tft.drawFastHLine(BTN_SETUP_X, BTN_SETUP_Y + i, BTN_SETUP_W,
+                          tft.color565(0, (uint8_t)(40 + t*30), (uint8_t)(70 + t*40)));
+    }
+    tft.drawRoundRect(BTN_SETUP_X, BTN_SETUP_Y, BTN_SETUP_W, BTN_SETUP_H, 6, COL_CYAN);
+    tft.setTextSize(1); tft.setTextColor(COL_CYAN);
+    int lw = strlen(label) * 6;
+    tft.setCursor(BTN_SETUP_X + (BTN_SETUP_W - lw) / 2, BTN_SETUP_Y + 11);
+    tft.print(label);
+}
+
+// ============================================================
+// Top bar — dark gradient + title + time + status dots
+// ============================================================
+inline void ui_drawTopBar(TFT_eSPI& tft, int page,
+                          const NetData& net, const char* timeStr) {
+    // Deep gradient bg
+    for (int i = 0; i < TOPBAR_H; i++) {
+        uint8_t r = 5 + i/4, g = 10 + i/3, b = 28 + i;
+        tft.drawFastHLine(0, i, SCREEN_W, tft.color565(r, g, b));
+    }
+    // Bottom glowing line
+    tft.drawFastHLine(0, TOPBAR_H - 2, SCREEN_W, COL_CYAN_DIM);
+    tft.drawFastHLine(0, TOPBAR_H - 1, SCREEN_W, tft.color565(0, 15, 35));
+
+    // App name
+    tft.setTextSize(1); tft.setTextColor(COL_CYAN);
+    tft.setCursor(8, 11); tft.print("AEROSENSE");
+    tft.setTextColor(tft.color565(0, 80, 100));
+    tft.print(" AIR");
+    if (strlen(timeStr) > 0) {
+        int tw = strlen(timeStr) * 12; // size 2 = 12px per char
+        tft.setTextSize(2); tft.setTextColor(COL_WHITE);
+        tft.setCursor(SCREEN_W / 2 - tw / 2, 7);
+        tft.print(timeStr);
+    }
+
+    // Status icons top-right
+    // WiFi icon
+    uint16_t wCol = net.wifiOk ? COL_GREEN : COL_RED;
+    icon_wifi(tft, SCREEN_W - 28, 14, 7, wCol);
+    // MQTT dot
+    uint16_t mCol = net.mqttOk ? COL_CYAN : COL_GRAY_DIM;
+    tft.fillCircle(SCREEN_W - 10, 14, 4, mCol);
+    tft.drawCircle(SCREEN_W - 10, 14, 4, tft.color565(0, 30, 50));
+}
+
+// ============================================================
+// Navigation bar — modern tab bar
+// ============================================================
+inline void ui_drawNavBar(TFT_eSPI& tft, int activePage) {
+    // Background gradient
+    for (int i = 0; i < NAVBAR_H; i++) {
+        uint8_t r = 4 + i/5, g = 8 + i/4, b = 22 + i/2;
+        tft.drawFastHLine(0, NAV_Y + i, SCREEN_W, tft.color565(r, g, b));
+    }
+    tft.drawFastHLine(0, NAV_Y, SCREEN_W, COL_CYAN_DIM);
+
+    // Vertical dividers
+    tft.drawFastVLine(NAV_ITEM_W,     NAV_Y + 6, NAVBAR_H - 12, tft.color565(0, 20, 40));
+    tft.drawFastVLine(NAV_ITEM_W * 2, NAV_Y + 6, NAVBAR_H - 12, tft.color565(0, 20, 40));
+
+    struct { const char* label; int page; } tabs[] = {
+        { "SENSOR", PAGE_DASHBOARD },
+        { "WIFI",   PAGE_WIFI      },
+        { "QR",     PAGE_MQTT      },
+    };
+
+    for (int i = 0; i < 3; i++) {
+        int x0  = NAV_ITEM_W * i;
+        int cx  = x0 + NAV_ITEM_W / 2;
+        int cy  = NAV_Y + 16;
+        bool active = (activePage == tabs[i].page);
+        uint16_t col = active ? COL_CYAN : tft.color565(60, 80, 110);
+
+        // Active tab highlight pill
+        if (active) {
+            for (int j = 0; j < 3; j++)
+                tft.drawFastHLine(x0 + 10, NAV_Y + j, NAV_ITEM_W - 20, COL_CYAN);
+            // Active tab bg glow
+            tft.fillRoundRect(x0 + 6, NAV_Y + 4, NAV_ITEM_W - 12, NAVBAR_H - 8, 5,
+                              tft.color565(0, 25, 50));
+        }
+
+        switch (tabs[i].page) {
+            case PAGE_DASHBOARD: icon_home(tft, cx, cy, 8, col); break;
+            case PAGE_WIFI:      icon_wifi(tft, cx, cy, 8, col); break;
+            case PAGE_MQTT:      icon_mqtt(tft, cx, cy, 8, col); break;
+        }
+
+        int lw = strlen(tabs[i].label) * 6;
+        tft.setTextSize(1); tft.setTextColor(col);
+        tft.setCursor(cx - lw/2, NAV_Y + NAVBAR_H - 14);
+        tft.print(tabs[i].label);
+    }
+}
+
+// ============================================================
+// Dashboard card — full redesign portrait
+// ============================================================
+struct CardDef {
+    const char* title;
+    const char* unit;
+    float       value;
+    bool        valid;
+    uint8_t     iconType;
+    uint16_t    accentCol;
+    float       warnHigh;
+    float       warnLow;
+};
+
+static void _clearCardValueArea(TFT_eSPI& tft, int x, int y, int w, int h) {
+    const int clearX = 8;
+    const int clearY = 36;
+    const int clearW = w - 16;
+    const int clearH = h - 52;
+    for (int i = 0; i < clearH; i++) {
+        int localY = clearY + i;
+        float t = (float)localY / h;
+        uint8_t r = (uint8_t)(6  + t * 8);
+        uint8_t g = (uint8_t)(12 + t * 10);
+        uint8_t b = (uint8_t)(28 + t * 22);
+        tft.drawFastHLine(x + clearX, y + localY, clearW, tft.color565(r, g, b));
+    }
+}
+
+static void _drawCardValueOnly(TFT_eSPI& tft, int x, int y, int w, int h,
+                               const CardDef& c) {
+    uint16_t acc = c.valid ? c.accentCol : COL_GRAY_DIM;
+    int vy = y + h / 2 - 10;
+
+    if (!c.valid) {
+        tft.setTextSize(2);
+        tft.setTextColor(COL_GRAY_DIM);
+        tft.setCursor(x + w / 2 - 18, vy);
+        tft.print("---");
+    } else {
+        uint16_t valCol = COL_WHITE;
+        if (c.warnHigh > 0 && c.value >= c.warnHigh) valCol = COL_RED;
+        else if (c.warnHigh > 0 && c.value >= c.warnHigh * 0.8f) valCol = COL_ORANGE;
+
+        char buf[12];
+        if (c.value < 10)        snprintf(buf, sizeof(buf), "%.1f", c.value);
+        else if (c.value < 1000) snprintf(buf, sizeof(buf), "%.1f", c.value);
+        else                     snprintf(buf, sizeof(buf), "%d", (int)c.value);
+
+        tft.setTextSize(2);
+        tft.setTextColor(valCol);
+        int vw = strlen(buf) * 12;
+        tft.setCursor(x + w / 2 - vw / 2, vy);
+        tft.print(buf);
+    }
+
+    int uy = y + h - 16;
+    tft.setTextSize(1);
+    tft.setTextColor(acc);
+    const char* ustr = c.unit;
+    int uw = 0;
+    bool hasDeg = ((uint8_t)ustr[0] == 0xB0);
+    if (hasDeg) uw = 6 + strlen(ustr + 1) * 6;
+    else        uw = strlen(ustr) * 6;
+    int ucx = x + w / 2 - uw / 2;
+    if (hasDeg) {
+        tft.drawCircle(ucx + 2, uy + 2, 2, acc);
+        ucx += 6;
+        ustr++;
+    }
+    tft.setCursor(ucx, uy);
+    tft.print(ustr);
+}
+
+inline void ui_updateDashboardValues(TFT_eSPI& tft, const SensorData& s) {
+    CardDef cards[4] = {
+        { "TEMP",  "\xB0""C",   s.temp, s.scd4xOk,  1, COL_ORANGE, 35,    0  },
+        { "HUMID", "%",         s.humi, s.scd4xOk,  2, COL_CYAN,   85,    30 },
+        { "CO2",   "ppm",       s.co2,  s.scd4xOk,  0, COL_GREEN,  2000,  0  },
+        { "LUX",   "lx",        s.lux,  s.bh1750Ok, 3, COL_YELLOW, 50000, 0  },
+    };
+
+    for (int row = 0; row < 2; row++) {
+        for (int col = 0; col < 2; col++) {
+            int idx = row * 2 + col;
+            int cx = CARD_MARGIN + col * (CARD_W + CARD_MARGIN);
+            int cy = CONTENT_Y + CARD_MARGIN + row * (CARD_H + CARD_MARGIN);
+            _clearCardValueArea(tft, cx, cy, CARD_W, CARD_H);
+            _drawCardValueOnly(tft, cx, cy, CARD_W, CARD_H, cards[idx]);
+        }
+    }
+}
+
+static void _drawCard(TFT_eSPI& tft, int x, int y, int w, int h,
+                      const CardDef& c) {
+    // Card background gradient (top darker, bottom slightly lighter)
+    for (int i = 0; i < h; i++) {
+        float t = (float)i / h;
+        uint8_t r = (uint8_t)(6  + t * 8);
+        uint8_t g = (uint8_t)(12 + t * 10);
+        uint8_t b = (uint8_t)(28 + t * 22);
+        tft.drawFastHLine(x, y + i, w, tft.color565(r, g, b));
+    }
+
+    // Accent bar at top (3px thick gradient)
+    uint16_t acc = c.valid ? c.accentCol : COL_GRAY_DIM;
+    tft.drawFastHLine(x + 6, y,     w - 12, acc);
+    tft.drawFastHLine(x + 4, y + 1, w - 8,  acc);
+    tft.drawFastHLine(x + 2, y + 2, w - 4,  tft.color565(0, 20, 40));
+
+    // Card border
+    tft.drawRoundRect(x, y, w, h, CARD_RADIUS, tft.color565(15, 28, 58));
+
+    // Title (top-left)
+    tft.setTextSize(1);
+    tft.setTextColor(c.valid ? acc : COL_GRAY_DIM);
+    tft.setCursor(x + 8, y + 8);
+    tft.print(c.title);
+
+    // Icon (top-right inside card)
+    int ix = x + w - 16, iy = y + 16;
+    switch (c.iconType) {
+        case 0: icon_co2 (tft, ix, iy, 8, c.valid ? acc : COL_GRAY_DIM); break;
+        case 1: icon_temp(tft, ix, iy, 8, c.valid ? acc : COL_GRAY_DIM); break;
+        case 2: icon_humi(tft, ix, iy, 8, c.valid ? acc : COL_GRAY_DIM); break;
+        case 3: icon_lux (tft, ix, iy, 8, c.valid ? acc : COL_GRAY_DIM); break;
+    }
+
+    // Value — BIG centre
+    int vy = y + h / 2 - 10;
+    if (!c.valid) {
+        tft.setTextSize(2); tft.setTextColor(COL_GRAY_DIM);
+        tft.setCursor(x + w/2 - 18, vy);
+        tft.print("---");
+    } else {
+        uint16_t valCol = COL_WHITE;
+        if (c.warnHigh > 0 && c.value >= c.warnHigh)        valCol = COL_RED;
+        else if (c.warnHigh > 0 && c.value >= c.warnHigh * 0.8f) valCol = COL_ORANGE;
+
+        tft.setTextSize(2); tft.setTextColor(valCol);
+        char buf[12];
+        if (c.value < 10)        snprintf(buf, sizeof(buf), "%.1f", c.value);
+        else if (c.value < 1000) snprintf(buf, sizeof(buf), "%.1f", c.value);
+        else                     snprintf(buf, sizeof(buf), "%d",   (int)c.value);
+        int vw = strlen(buf) * 12;
+        tft.setCursor(x + w/2 - vw/2, vy);
+        tft.print(buf);
+    }
+
+    // Unit — bottom-centre
+    int uy = y + h - 16;
+    tft.setTextSize(1); tft.setTextColor(acc);
+    const char* ustr = c.unit;
+    int uw = 0;
+    bool hasDeg = ((uint8_t)ustr[0] == 0xB0);
+    if (hasDeg) uw = 6 + strlen(ustr+1)*6;
+    else        uw = strlen(ustr) * 6;
+    int ucx = x + w/2 - uw/2;
+    if (hasDeg) {
+        tft.drawCircle(ucx + 2, uy + 2, 2, acc);
+        ucx += 6; ustr++;
+    }
+    tft.setCursor(ucx, uy); tft.print(ustr);
+
+    // Thin bottom glow line
+    tft.drawFastHLine(x + 6, y + h - 1, w - 12,
+                      tft.color565(
+                          (acc >> 11) & 0x1F,
+                          (acc >> 5) & 0x3F,
+                          acc & 0x1F));
+}
+
+// ============================================================
+// Dashboard
+// ============================================================
+inline void ui_drawDashboard(TFT_eSPI& tft, const SensorData& s) {
+    tft.fillRect(0, CONTENT_Y, SCREEN_W, CONTENT_H, COL_BG);
+
+    CardDef cards[4] = {
+        { "TEMP",  "\xB0""C",   s.temp, s.scd4xOk,  1, COL_ORANGE, 35,    0  },
+        { "HUMID", "%",         s.humi, s.scd4xOk,  2, COL_CYAN,   85,    30 },
+        { "CO2",   "ppm",       s.co2,  s.scd4xOk,  0, COL_GREEN,  2000,  0  },
+        { "LUX",   "lx",        s.lux,  s.bh1750Ok, 3, COL_YELLOW, 50000, 0  },
+    };
+
+    for (int row = 0; row < 2; row++) {
+        for (int col = 0; col < 2; col++) {
+            int idx = row * 2 + col;
+            int cx = CARD_MARGIN + col * (CARD_W + CARD_MARGIN);
+            int cy = CONTENT_Y + CARD_MARGIN + row * (CARD_H + CARD_MARGIN);
+            _drawCard(tft, cx, cy, CARD_W, CARD_H, cards[idx]);
+        }
+    }
+}
+
+// ============================================================
+// WiFi page — portrait layout
+// ============================================================
+inline void ui_drawWifiPage(TFT_eSPI& tft, const NetData& net) {
+    tft.fillRect(0, CONTENT_Y, SCREEN_W, CONTENT_H, COL_BG);
+
+    // Header card
+    for (int i = 0; i < 36; i++) {
+        uint8_t r=5+i/5, g=10+i/4, b=28+i/2;
+        tft.drawFastHLine(0, CONTENT_Y + i, SCREEN_W, tft.color565(r,g,b));
+    }
+    tft.drawFastHLine(0, CONTENT_Y + 36, SCREEN_W, COL_CYAN_DIM);
+
+    // Status badge
+    uint16_t sBg = net.wifiOk ? COL_GREEN : COL_RED;
+    tft.fillRoundRect(SCREEN_W - 62, CONTENT_Y + 8, 58, 18, 5, sBg);
+    tft.setTextColor(tft.color565(0, 0, 0));
+    tft.setTextSize(1);
+    tft.setCursor(SCREEN_W - 56, CONTENT_Y + 13);
+    tft.print(net.wifiOk ? " ONLINE" : "OFFLINE");
+
+    // Header label
+    tft.setTextSize(2); tft.setTextColor(COL_CYAN);
+    tft.setCursor(8, CONTENT_Y + 9);
+    tft.print("WiFi");
+
+    // Icon centred below header
+    icon_wifi(tft, SCREEN_W/2, CONTENT_Y + 62, 18,
+              net.wifiOk ? COL_CYAN : COL_GRAY_DIM);
+
+    // Info rows
+    struct Row { const char* label; String value; uint16_t col; };
+    Row rows[] = {
+        { "SSID",   net.ssid,                         COL_WHITE    },
+        { "IP",     net.ip,                           COL_CYAN     },
+        { "STATUS", net.wifiOk ? "Connected" : "---", net.wifiOk ? COL_GREEN : COL_RED },
+    };
+    int ry = CONTENT_Y + 100;
+    for (auto& r : rows) {
+        tft.fillRect(0, ry, SCREEN_W, 26, tft.color565(6,12,26));
+        tft.drawFastHLine(0, ry + 25, SCREEN_W, tft.color565(12, 22, 45));
+        tft.setTextSize(1); tft.setTextColor(COL_GRAY_DIM);
+        tft.setCursor(10, ry + 6); tft.print(r.label);
+        tft.setTextColor(r.col);
+        int vw = r.value.length() * 6;
+        tft.setCursor(SCREEN_W - 10 - vw, ry + 6);
+        tft.print(r.value);
+        ry += 26;
+    }
+
+    // Hint text
+    tft.setTextSize(1); tft.setTextColor(COL_GRAY_DIM);
+    tft.setCursor(SCREEN_W/2 - 66, ry + 8);
+    tft.print("Tap below or SSID to edit");
+
+    _drawSetupBtn(tft, ">> EDIT WIFI");
+}
+
+// ============================================================
+// MQTT page — portrait layout
+// ============================================================
+inline void ui_drawMqttPage(TFT_eSPI& tft, const NetData& net) {
+    tft.fillRect(0, CONTENT_Y, SCREEN_W, CONTENT_H, COL_BG);
+
+    // Header
+    for (int i = 0; i < 36; i++) {
+        uint8_t r=5+i/5, g=10+i/4, b=28+i/2;
+        tft.drawFastHLine(0, CONTENT_Y + i, SCREEN_W, tft.color565(r,g,b));
+    }
+    tft.drawFastHLine(0, CONTENT_Y + 36, SCREEN_W, COL_CYAN_DIM);
+
+    uint16_t sBg = net.mqttOk ? COL_GREEN : COL_RED;
+    tft.fillRoundRect(SCREEN_W - 62, CONTENT_Y + 8, 58, 18, 5, sBg);
+    tft.setTextColor(tft.color565(0, 0, 0));
+    tft.setTextSize(1);
+    tft.setCursor(SCREEN_W - 56, CONTENT_Y + 13);
+    tft.print(net.mqttOk ? " ONLINE" : "OFFLINE");
+
+    tft.setTextSize(2); tft.setTextColor(COL_CYAN);
+    tft.setCursor(8, CONTENT_Y + 9);
+    tft.print("ZALO CLAIM");
+
+    const String qrText = String("i=") + TB_HW_ID + "&k=" + TB_SECRET_KEY;
+
+    QRCode qrcode;
+    uint8_t qrcodeData[qrcode_getBufferSize(3)];
+    qrcode_initText(&qrcode, qrcodeData, 3, ECC_LOW, qrText.c_str());
+
+    const int scale = 5;
+    const int quiet = 4;
+    const int qrPixelSize = (qrcode.size + quiet * 2) * scale;
+    const int qrX = (SCREEN_W - qrPixelSize) / 2;
+    const int qrY = CONTENT_Y + 48;
+
+    tft.fillRect(qrX, qrY, qrPixelSize, qrPixelSize, COL_WHITE);
+    for (uint8_t y = 0; y < qrcode.size; y++) {
+        for (uint8_t x = 0; x < qrcode.size; x++) {
+            if (qrcode_getModule(&qrcode, x, y)) {
+                tft.fillRect(qrX + (x + quiet) * scale,
+                             qrY + (y + quiet) * scale,
+                             scale, scale, 0x0000);
+            }
+        }
+    }
+
+    int textY = qrY + qrPixelSize + 10;
+    tft.setTextSize(1);
+    tft.setTextColor(COL_GRAY_DIM);
+    tft.setCursor(SCREEN_W / 2 - 72, textY);
+
+
+}
+
+// ============================================================
+// Router: draw the right page
+// ============================================================
+inline void ui_drawPage(TFT_eSPI& tft, int page,
+                        const SensorData& sensors, const NetData& net,
+                        const char* timeStr) {
+    ui_drawTopBar(tft, page, net, timeStr);
+    ui_drawNavBar(tft, page);
+    switch (page) {
+        case PAGE_DASHBOARD: ui_drawDashboard(tft, sensors); break;
+        case PAGE_WIFI:      ui_drawWifiPage(tft, net);      break;
+        case PAGE_MQTT:      ui_drawMqttPage(tft, net);      break;
+    }
+}
+
+
+
